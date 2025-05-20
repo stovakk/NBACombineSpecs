@@ -42,8 +42,20 @@ def clean_and_merge(anthro_data, drill_data):
     for col in numeric_drill_cols:
         combined_drill[col] = pd.to_numeric(combined_drill[col], errors='coerce')
 
-    # Merge and drop rows without height data
+    # Merge and drop rows without key physical measurements
     merged_df = pd.merge(combined_anthro, combined_drill, on=["PLAYER_NAME", "Season"], how="inner")
     merged_df = merged_df.dropna(subset=['HEIGHT_WO_SHOES', 'WINGSPAN', 'STANDING_REACH', 'HAND_LENGTH', 'HAND_WIDTH'])
 
+    # Sort by season descending (most recent first)
+    merged_df['Season_Year'] = merged_df['Season'].str[:4].astype(int)  # convert '2024-25' → 2024
+    merged_df = merged_df.sort_values(by='Season_Year', ascending=False)
+
+    # Drop duplicates by player, keeping first non-null per column
+    def most_recent_non_null(group):
+        return group.ffill().bfill().iloc[0]
+
+    merged_df = merged_df.groupby("PLAYER_NAME", as_index=False).apply(most_recent_non_null).reset_index(drop=True)
+    merged_df = merged_df.drop(columns=["Season_Year"])  # cleanup helper column
+
     return merged_df
+
