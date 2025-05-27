@@ -2,11 +2,11 @@ import pandas as pd
 from dash import Dash, html, dcc, Input, Output, State
 from utils.data_downloader import download_draft_combine_anthro_data, download_draft_combine_drill_data
 from utils.data_cleaner import clean_and_merge
+from utils.player_loader import load_custom_players
 from components.distance_calculator import calculate_player_distances
 import plotly.express as px
 
-
-# Download and prepare data
+# Load and clean data
 anthro_data_all, drill_data_all = [], []
 for year in range(2000, 2025):
     season = f"{year}-{str(year+1)[2:]}"
@@ -17,25 +17,22 @@ for year in range(2000, 2025):
     drill_data_all.append(drill)
 
 merged_df = clean_and_merge(anthro_data_all, drill_data_all)
+utah_players = load_custom_players()
+
 app = Dash(__name__)
-
-# Define renaming and column exclusion
-rename_cols = {
-    "PLAYER_NAME": "Player",
-    "HEIGHT_WO_SHOES": "Height (in)",
-    "WINGSPAN": "Wingspan (in)",
-    "STANDING_REACH": "Standing Reach (in)",
-    "HAND_LENGTH": "Hand Length (in)",
-    "HAND_WIDTH": "Hand Width (in)",
-    "MAX_VERTICAL_LEAP": "Max Vert (in)",
-    "THREE_QUARTER_SPRINT": "Sprint (sec)",
-    "STANDING_VERTICAL_LEAP": "Standing Vert (in)",
-}
-
-drop_cols = ["MODIFIED_LANE_AGILITY_TIME", "BENCH_PRESS"]
 
 app.layout = html.Div([
     html.H1("NBA Player Comparison Dashboard", style={"textAlign": "center"}),
+
+    html.Div([
+        html.Label("Select a Utah Player"),
+        dcc.Dropdown(
+            id="utah-player-dropdown",
+            options=[{"label": name, "value": name} for name in utah_players["Player"]],
+            placeholder="Choose a player...",
+            style={"width": "50%", "marginBottom": "20px"}
+        )
+    ]),
 
     html.Div([
         html.Div([
@@ -78,8 +75,6 @@ app.layout = html.Div([
             "justifyContent": "center",
             "marginTop": "20px"
         })
-
-
     ], style={
         "maxWidth": "900px",
         "margin": "0 auto",
@@ -94,16 +89,39 @@ app.layout = html.Div([
 ])
 
 @app.callback(
+    [Output("height-input", "value"),
+     Output("wingspan-input", "value"),
+     Output("reach-input", "value"),
+     Output("hand-length-input", "value"),
+     Output("hand-width-input", "value")],
+    [Input("utah-player-dropdown", "value")]
+)
+def populate_inputs(player_name):
+    if player_name:
+        row = utah_players[utah_players["Player"] == player_name]
+        if not row.empty:
+            row = row.iloc[0]
+            return (
+                row["HEIGHT_WO_SHOES"],
+                row["WINGSPAN"],
+                row["STANDING_REACH"],
+                row["HAND_LENGTH"],
+                row["HAND_WIDTH"]
+            )
+    return [None] * 5
+
+@app.callback(
     [Output("closest-players-output", "children"),
      Output("averaged-metrics-output", "children")],
     [Input("submit-button", "n_clicks")],
-    [State("height-input", "value"),
+    [State("utah-player-dropdown", "value"),
+     State("height-input", "value"),
      State("wingspan-input", "value"),
      State("reach-input", "value"),
      State("hand-length-input", "value"),
      State("hand-width-input", "value")]
 )
-def calculate_and_display(n_clicks, height, wingspan, reach, hand_length, hand_width):
+def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_length, hand_width):
     if n_clicks > 0 and all([height, wingspan, reach, hand_length, hand_width]):
         player_input = {
             'HEIGHT_WO_SHOES': height,
@@ -113,51 +131,79 @@ def calculate_and_display(n_clicks, height, wingspan, reach, hand_length, hand_w
             'HAND_WIDTH': hand_width
         }
 
-        # Step 1: Calculate distances
         distances_df = calculate_player_distances(merged_df, player_input)
         top_names = distances_df.head(6)['PLAYER_NAME'].tolist()
-
-        # Step 2: Get player rows and attach distance
         top_df = merged_df[merged_df['PLAYER_NAME'].isin(top_names)].copy()
         top_df = top_df.merge(distances_df[['PLAYER_NAME', 'Distance']], on='PLAYER_NAME', how='left')
 
-        # Step 3: Clean column names for display
         display_df = top_df.drop(columns=['Distance'], errors='ignore').copy()
-
         clean_cols = [col.replace('_', ' ').title() for col in display_df.columns]
         col_map = dict(zip(display_df.columns, clean_cols))
         display_df = display_df.rename(columns=col_map)
+        display_cols = display_df.columns
 
-        # Step 4: Table — include everything
         table_rows = [html.Tr([html.Th("#")] + [html.Th(col) for col in display_df.columns])]
+
+        # Build "You" or selected player row
+        you_row = pd.Series(index=display_df.columns, dtype=object)
+
+        if player_name:
+            matched = utah_players[utah_players["Player"] == player_name]
+            if not matched.empty:
+                row = matched.iloc[0]
+                renamed_row = row.rename({col: col.replace('_', ' ').title() for col in row.index})
+                for col in display_df.columns:
+                    if col in renamed_row:
+                        you_row[col] = renamed_row[col]
+                you_row["Player Name"] = player_name
+            else:
+                you_row.update({
+                    'Height Wo Shoes': height,
+                    'Wingspan': wingspan,
+                    'Standing Reach': reach,
+                    'Hand Length': hand_length,
+                    'Hand Width': hand_width
+                })
+                you_row["Player Name"] = "You"
+        else:
+            you_row.update({
+                'Height Wo Shoes': height,
+                'Wingspan': wingspan,
+                'Standing Reach': reach,
+                'Hand Length': hand_length,
+                'Hand Width': hand_width
+            })
+            you_row["Player Name"] = "You"
+
+        row_cells = [html.Td("—")] + [
+            html.Td(str(you_row[col]) if pd.notna(you_row[col]) else "—") for col in display_df.columns
+        ]
+        table_rows.append(html.Tr(row_cells))
+
+        table_rows.append(html.Tr([html.Td("—") for _ in range(len(display_df.columns) + 1)]))
+
         for i, (_, row) in enumerate(display_df.iterrows(), 1):
-            row_cells = [html.Td(f"{i}.")] + [
-                html.Td(str(row[col]) if pd.notna(row[col]) else "—") for col in display_df.columns
-            ]
+            row_cells = [html.Td(f"{i}.")] + [html.Td(str(row[col]) if pd.notna(row[col]) else "—") for col in display_df.columns]
             table_rows.append(html.Tr(row_cells))
 
         player_table = html.Div([
-            html.Div([
-                html.Table(table_rows, className="data-table")
-            ], style={
-                "overflowX": "auto",
-                "maxWidth": "100%",
-                "border": "1px solid #ccc",
-                "padding": "10px",
-                "borderRadius": "10px",
-                "backgroundColor": "#f9f9f9"
-            })
-        ])
+            html.Table(table_rows, className="data-table")
+        ], style={
+            "overflowX": "auto",
+            "maxWidth": "100%",
+            "border": "1px solid #ccc",
+            "padding": "10px",
+            "borderRadius": "10px",
+            "backgroundColor": "#f9f9f9"
+        })
 
-
-        # Step 5: Averages — exclude user-input fields
         exclude_fields = ['Height Wo Shoes', 'Wingspan', 'Standing Reach', 'Hand Length', 'Hand Width', 'Distance']
         avg_df = display_df.drop(columns=exclude_fields, errors="ignore")
         numeric_df = avg_df.select_dtypes(include='number')
         avg_values = numeric_df.mean().round(2)
 
         averages_section = html.Div([
-            html.H3("Relevant Player Information", style={"textAlign": "center", "marginTop": "30px"}),
+            html.H3("Similar Player Average Metrics", style={"textAlign": "center", "marginTop": "30px"}),
             html.Div([
                 html.Div([
                     html.Div(col, className="metric-label"),
@@ -166,36 +212,18 @@ def calculate_and_display(n_clicks, height, wingspan, reach, hand_length, hand_w
             ], className="averages-container")
         ])
 
-        # Step 6: Graphs for numeric columns (excluding input fields)
         graphs = []
         player_name_col = display_df['Player Name']
         for col in numeric_df.columns:
             y_values = display_df[col]
             sorted_vals = sorted(y_values.dropna())
-
-            # Smart y-axis scaling
-            if len(sorted_vals) >= 2 and sorted_vals[0] == 0:
-                y_min = sorted_vals[1] * 0.95
-            elif len(sorted_vals) >= 1:
-                y_min = sorted_vals[0] * 0.95
-            else:
-                y_min = 0
+            y_min = sorted_vals[1] * 0.95 if len(sorted_vals) >= 2 and sorted_vals[0] == 0 else (sorted_vals[0] * 0.95 if sorted_vals else 0)
             y_max = max(sorted_vals) * 1.05 if sorted_vals else 1
 
-            fig = px.bar(
-                x=player_name_col,
-                y=y_values,
-                labels={'x': 'Player Name', 'y': col},
-                title=col,
-                height=300
-            )
+            fig = px.bar(x=player_name_col, y=y_values, labels={'x': 'Player Name', 'y': col}, title=col, height=300)
             fig.update_yaxes(range=[y_min, y_max])
 
-            graphs.append(
-                html.Div([
-                    dcc.Graph(figure=fig)
-                ], style={"marginBottom": "40px"})
-            )
+            graphs.append(dcc.Graph(figure=fig))
 
         graph_section = html.Div([
             html.H3("Metric Comparisons Across Closest Players", style={"textAlign": "center", "marginTop": "40px"}),
