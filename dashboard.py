@@ -5,6 +5,8 @@ from utils.data_cleaner import clean_and_merge
 from utils.player_loader import load_custom_players
 from components.distance_calculator import calculate_player_distances
 import plotly.express as px
+import plotly.graph_objects as go
+
 
 # Load and clean data
 anthro_data_all, drill_data_all = [], []
@@ -25,14 +27,15 @@ app.layout = html.Div([
     html.H1("NBA Player Comparison Dashboard", style={"textAlign": "center"}),
 
     html.Div([
-        html.Label("Select a Utah Player"),
+        html.Label("Select a Utah Player", style={"textAlign": "center"}),
         dcc.Dropdown(
             id="utah-player-dropdown",
             options=[{"label": name, "value": name} for name in utah_players["Player"]],
             placeholder="Choose a player...",
-            style={"width": "50%", "marginBottom": "20px"}
+            style={"width": "300px", "marginBottom": "20px"}
         )
-    ]),
+    ], style={"display": "flex", "flexDirection": "column", "alignItems": "center", "marginBottom": "10px"}),
+
 
     html.Div([
         html.Div([
@@ -212,16 +215,63 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
             ], className="averages-container")
         ])
 
-        graphs = []
-        player_name_col = display_df['Player Name']
-        for col in numeric_df.columns:
-            y_values = display_df[col]
-            sorted_vals = sorted(y_values.dropna())
-            y_min = sorted_vals[1] * 0.95 if len(sorted_vals) >= 2 and sorted_vals[0] == 0 else (sorted_vals[0] * 0.95 if sorted_vals else 0)
-            y_max = max(sorted_vals) * 1.05 if sorted_vals else 1
 
-            fig = px.bar(x=player_name_col, y=y_values, labels={'x': 'Player Name', 'y': col}, title=col, height=300)
-            fig.update_yaxes(range=[y_min, y_max])
+
+        utah_df = utah_players
+        selected_utah_row = utah_df[utah_df['Player'] == player_name]
+
+        selected_utah_row = selected_utah_row.rename(columns = {
+            'Player': 'Player Name',
+            'HEIGHT_WO_SHOES': 'Height Wo Shoes',
+            'WEIGHT': 'Weight',
+            'WINGSPAN': 'Wingspan',
+            'STANDING_REACH': 'Standing Reach',
+            'HAND_LENGTH': 'Hand Length',
+            'HAND_WIDTH': 'Hand Width',
+            'STANDING_VERTICAL_LEAP': 'Standing Vertical Leap',
+            'MAX_VERTICAL_LEAP': 'Max Vertical Leap',
+            'LANE_AGILITY_TIME': 'Lane Agility Time',
+            'MODIFIED_LANE_AGILITY_TIME': 'Modified Lane Agility Time',
+            'THREE_QUARTER_SPRINT': 'Three Quarter Sprint',
+            'BENCH_PRESS': 'Bench Press'
+        })
+
+        
+
+        graphs = []
+        
+        for col in numeric_df.columns:
+            
+            full_y = pd.concat([selected_utah_row[['Player Name', col]], display_df[['Player Name', col]]])
+            y_values = full_y[col]
+
+            player_name_col = full_y['Player Name']
+
+            sorted_vals = sorted(y_values.dropna())
+            y_min = sorted_vals[1] * 0.85 if len(sorted_vals) >= 2 and sorted_vals[0] == 0 else (sorted_vals[0] * 0.95 if sorted_vals else 0)
+            y_max = max(sorted_vals) * 1.15 if sorted_vals else 1
+
+            # Create color list: first bar red, rest steelblue
+            colors = ['#BE0000'] + ['steelblue'] * (len(full_y) - 1)
+
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=full_y['Player Name'],
+                    y=[v if v != "N/A" else 0 for v in full_y[col]],
+                    marker_color=colors,
+                    text=full_y[col],  
+                    textposition='outside' 
+                )
+            ])
+
+            fig.update_layout(
+                title=col,
+                height=300,
+                yaxis=dict(range=[y_min, y_max]),
+                xaxis_title='Player Name',
+                yaxis_title=col
+            )
+
 
             graphs.append(dcc.Graph(figure=fig))
 
@@ -234,5 +284,11 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
 
     return "", ""
 
+
+
+
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+
