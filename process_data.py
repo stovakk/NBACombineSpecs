@@ -31,5 +31,3 @@ player_of_interest = {
 
 # Calculate distances
 working_df = calculate_player_distances(merged_df, player_of_interest)
-
-print(working_df.head())
