@@ -306,12 +306,3 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
 
 
     return "", ""
-
-
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
-
-
-
