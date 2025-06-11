@@ -16,6 +16,7 @@ for year in range(2000, 2025):
 
 merged_df = clean_and_merge(anthro_data_all, drill_data_all)
 app = Dash(__name__)
+server = app.server
 
 app.layout = html.Div([
     html.H1("NBA Player Comparison Dashboard", style={"textAlign": "center", "marginBottom": "40px"}),
