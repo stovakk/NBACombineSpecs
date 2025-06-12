@@ -6,3 +6,4 @@ scikit-learn
 requests
 urllib3<2.0
 numpy
+gunicorn
