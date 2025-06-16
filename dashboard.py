@@ -19,7 +19,38 @@ for year in range(2000, 2025):
     drill_data_all.append(drill)
 
 merged_df = clean_and_merge(anthro_data_all, drill_data_all)
+
 utah_players = load_custom_players()
+
+playerStats = load_custom_players("draft_players.csv")
+
+playerMinutes = load_custom_players("minutes_per_player.csv")
+
+# Create lowercase temporary columns for comparison
+merged_df['name_lower'] = merged_df['PLAYER_NAME'].str.lower()
+playerStats['name_lower'] = playerStats['Player'].str.lower()
+playerMinutes['name_lower'] = playerMinutes['Player'].str.lower()
+
+
+# Perform merge on lowercase name match
+final_df = merged_df.merge(
+    playerStats,
+    how='left',
+    on='name_lower',
+    suffixes=('', '_from_stats')
+)
+final_df = final_df.merge(
+    playerMinutes[['name_lower', 'MP']],  # keep only necessary columns
+    how='left',
+    on='name_lower'
+)
+
+# Drop the temporary lowercase column
+final_df = final_df.drop(columns=['name_lower', 'Player', 'Minutes Played'], errors='ignore')
+
+final_df = final_df.rename(columns={'MP': 'Minutes Played Per Game'})
+
+print("Merged DataFrame Columns:", final_df.columns.tolist())
 
 app = Dash(__name__)
 
@@ -88,6 +119,21 @@ app.layout = html.Div([
         }),
 
         html.Div([
+            html.Label("Filter Players By:", style={"fontWeight": "bold", "marginBottom": "10px"}),
+            dcc.Checklist(
+                id="filter-checklist",
+                options=[
+                    {"label": "First Round Draft Picks", "value": "first_round"},
+                    {"label": "Played Significant Minutes", "value": "significant_minutes"},
+                    {"label": "Was Drafted", "value": "was_drafted"},
+                ],
+                value=[],
+                labelStyle={"display": "block", "marginBottom": "5px"},
+                style={"marginBottom": "20px"}
+            )
+        ]),
+
+        html.Div([
             html.Button("Find Closest Players", id="submit-button", n_clicks=0,
                         style={
                             "height": "45px",
@@ -123,6 +169,7 @@ app.layout = html.Div([
 def populate_inputs(player_name):
     if player_name:
         row = utah_players[utah_players["Player"] == player_name]
+
         if not row.empty:
             row = row.iloc[0]
             return (
@@ -137,16 +184,18 @@ def populate_inputs(player_name):
 @app.callback(
     [Output("closest-players-output-content", "children"),
      Output("averaged-metrics-output-averages", "children"),
-    Output("averaged-metrics-output-graphs", "children")],
+     Output("averaged-metrics-output-graphs", "children")],
     [Input("submit-button", "n_clicks")],
     [State("utah-player-dropdown", "value"),
      State("height-input", "value"),
      State("wingspan-input", "value"),
      State("reach-input", "value"),
      State("hand-length-input", "value"),
-     State("hand-width-input", "value")]
+     State("hand-width-input", "value"),
+     State("filter-checklist", "value")]
 )
-def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_length, hand_width):
+
+def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_length, hand_width, filters):
     if n_clicks > 0 and all([height, wingspan, reach, hand_length, hand_width]):
         player_input = {
             'HEIGHT_WO_SHOES': height,
@@ -156,16 +205,33 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
             'HAND_WIDTH': hand_width
         }
 
-        distances_df = calculate_player_distances(merged_df, player_input)
+        # Start with the full dataset
+        filtered_df = final_df.copy()
+        filtered_df['Pick'] = pd.to_numeric(filtered_df['Pick'], errors='coerce')
+        filtered_df['Minutes Played Per Game'] = pd.to_numeric(filtered_df['Minutes Played Per Game'], errors='coerce')
+
+
+        if "first_round" in filters:
+            filtered_df = filtered_df[filtered_df['Pick'] <= 30]
+
+        if "significant_minutes" in filters:
+            filtered_df = filtered_df[filtered_df['Minutes Played Per Game'] >= 10]  # Example threshold
+
+        if "was_drafted" in filters:
+            filtered_df = filtered_df[filtered_df['Pick'].notna()]
+
+        distances_df = calculate_player_distances(filtered_df, player_input)
         top_names = distances_df.head(6)['PLAYER_NAME'].tolist()
-        top_df = merged_df[merged_df['PLAYER_NAME'].isin(top_names)].copy()
+        top_df = filtered_df[filtered_df['PLAYER_NAME'].isin(top_names)].copy()
         top_df = top_df.merge(distances_df[['PLAYER_NAME', 'Distance']], on='PLAYER_NAME', how='left')
 
-        display_df = top_df.drop(columns=['Distance'], errors='ignore').copy()
+        display_df = top_df.drop(columns=['Distance', 'Name Lower', 'name_lower'], errors='ignore').copy()
         clean_cols = [col.replace('_', ' ').title() for col in display_df.columns]
         col_map = dict(zip(display_df.columns, clean_cols))
+
         display_df = display_df.rename(columns=col_map)
-        display_cols = display_df.columns
+        display_df = display_df.rename(columns={'Pick': 'Draft Pick #'})
+
 
         table_rows = [html.Tr([html.Th("#")] + [html.Th(col) for col in display_df.columns])]
 
@@ -181,6 +247,14 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
                     if col in renamed_row:
                         you_row[col] = renamed_row[col]
                 you_row["Player Name"] = player_name
+                if "Draft Pick #" in display_df.columns and pd.isna(you_row.get("Draft Pick #")):
+                    you_row["Draft Pick #"] = "Undrafted"
+                if 'DraftYear' in display_df.columns and pd.isna(you_row.get("DraftYear")):
+                    display_df['DraftYear'] = display_df['DraftYear'].fillna("")
+                if "Minutes Played Per Game" in display_df.columns and pd.isna(you_row.get("Minutes Played Per Game")):
+                    you_row["Minutes Played Per Game"] = ""
+
+
             else:
                 you_row.update({
                     'Height Wo Shoes': height,
@@ -190,6 +264,14 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
                     'Hand Width': hand_width
                 })
                 you_row["Player Name"] = "You"
+                if "Draft Pick #" in display_df.columns:
+                    you_row["Draft Pick #"] = "Undrafted"
+                if 'DraftYear' in display_df.columns:
+                    display_df['DraftYear'] = display_df['DraftYear'].fillna("")
+                if "Minutes Played Per Game" in display_df.columns:
+                    you_row["Minutes Played Per Game"] = ""
+
+
         else:
             you_row.update({
                 'Height Wo Shoes': height,
@@ -222,7 +304,7 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
             "backgroundColor": "#f9f9f9"
         })
 
-        exclude_fields = ['Height Wo Shoes', 'Wingspan', 'Standing Reach', 'Hand Length', 'Hand Width', 'Distance']
+        exclude_fields = ['Height Wo Shoes', 'Wingspan', 'Standing Reach', 'Hand Length', 'Hand Width', 'Distance', 'Draft Pick #', 'Draftyear', 'Minutes Played Per Game']
         avg_df = display_df.drop(columns=exclude_fields, errors="ignore")
         numeric_df = avg_df.select_dtypes(include='number')
         avg_values = numeric_df.mean().round(2)
@@ -305,4 +387,4 @@ def calculate_and_display(n_clicks, player_name, height, wingspan, reach, hand_l
         return player_table, averages_section, graph_section
 
 
-    return "", ""
+    return "", "", ""
